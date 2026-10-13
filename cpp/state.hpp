@@ -4,62 +4,59 @@
 #include <stdexcept>
 #include <vector>
 
-namespace forcewindow {
-// A in row-major order; displacement is the first state coordinate.
-class StateMap {
-  std::array<double, 4> a_;
-  std::array<double, 2> b_;
+// The observation is taken BEFORE the interval load is applied.
+class Recurrence {
+  std::array<double, 4> a;
+  std::array<double, 2> b;
+  std::size_t n, tail;
 
   static void finite(const std::vector<double> &v) {
     for (double x : v)
       if (!std::isfinite(x))
-        throw std::invalid_argument("Inputs must be finite");
+        throw std::invalid_argument("input must be finite");
   }
 
 public:
-  StateMap(std::array<double, 4> a, std::array<double, 2> b) : a_(a), b_(b) {
-    for (double x : a_)
-      if (!std::isfinite(x))
-        throw std::invalid_argument("A must be finite");
-    for (double x : b_)
-      if (!std::isfinite(x))
-        throw std::invalid_argument("B must be finite");
+  Recurrence(std::array<double, 4> transition, std::array<double, 2> input, std::size_t loads,
+             std::size_t extra)
+      : a(transition), b(input), n(loads), tail(extra) {
+    if (n == 0 || n > 10000000 || tail > 10000000 || n + tail > 10000000)
+      throw std::invalid_argument("require 1 <= loads and loads + tail <= 10000000");
+    finite(std::vector<double>(a.begin(), a.end()));
+    finite(std::vector<double>(b.begin(), b.end()));
   }
 
-  std::vector<double> forward(const std::vector<double> &f, std::size_t observations) const {
+  std::vector<double> forward(const std::vector<double> &f) const {
+    if (f.size() != n)
+      throw std::invalid_argument("wrong load length");
     finite(f);
-    if (f.empty() || observations == 0)
-      throw std::invalid_argument("Nonempty force and observation window required");
-    std::vector<double> y(observations);
-    double q = 0.0, v = 0.0;
-    for (std::size_t i = 0; i < observations; ++i) {
-      y[i] = q;
-      if (i + 1 == observations)
-        break;
-      const double u = i < f.size() ? f[i] : 0.0;
-      const double next_q = a_[0] * q + a_[1] * v + b_[0] * u;
-      v = a_[2] * q + a_[3] * v + b_[1] * u;
-      q = next_q;
+    std::vector<double> y(n + tail);
+    double q = 0, v = 0;
+    for (std::size_t k = 0; k < y.size(); ++k) {
+      y[k] = q;
+      const double load = k < n ? f[k] : 0;
+      const double qnew = a[0] * q + a[1] * v + b[0] * load;
+      v = a[2] * q + a[3] * v + b[1] * load;
+      q = qnew;
     }
     finite(y);
     return y;
   }
 
-  std::vector<double> adjoint(const std::vector<double> &r, std::size_t forces) const {
+  std::vector<double> adjoint(const std::vector<double> &r) const {
+    if (r.size() != n + tail)
+      throw std::invalid_argument("wrong residual length");
     finite(r);
-    if (r.empty() || forces == 0)
-      throw std::invalid_argument("Nonempty residual and force window required");
-    std::vector<double> g(forces, 0.0);
-    double p = 0.0, w = 0.0;
-    for (std::size_t i = r.size(); i-- > 0;) {
-      if (i < forces)
-        g[i] = b_[0] * p + b_[1] * w;
-      const double next_p = a_[0] * p + a_[2] * w + r[i];
-      w = a_[1] * p + a_[3] * w;
-      p = next_p;
+    std::vector<double> g(n);
+    double p = 0, s = 0;
+    for (std::size_t k = r.size(); k-- > 0;) {
+      if (k < n)
+        g[k] = b[0] * p + b[1] * s;
+      const double pnew = a[0] * p + a[2] * s + r[k];
+      s = a[1] * p + a[3] * s;
+      p = pnew;
     }
     finite(g);
     return g;
   }
 };
-} // namespace forcewindow
